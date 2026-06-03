@@ -1,0 +1,17 @@
+# Secrets & config
+.env
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Local data (future milestones)
+*.sqlite
+*.db
+data/
+logs/
