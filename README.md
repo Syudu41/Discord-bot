@@ -98,7 +98,7 @@ to `memory/data/`; delete a channel's JSON there to wipe its memory.
 | `OLLAMA_KEEP_ALIVE` | `30m` | How long the model stays resident. `-1` = forever. |
 | `DISABLE_THINKING` | *(auto)* | Auto-on for `qwen3` only; set `true`/`false` to force. |
 | `TEMPERATURE` / `TOP_P` / `REPEAT_PENALTY` | `0.85` / `0.9` / `1.1` | Sampling. |
-| `NUM_CTX` / `MAX_TOKENS` | `4096` / `384` | Context window / max generated tokens. |
+| `NUM_CTX` / `MAX_TOKENS` | `4096` / `512` | Context window / max generated tokens. |
 | `HISTORY_TURNS` | `8` | User+bot pairs kept as live context. |
 | `OLLAMA_TIMEOUT` | `120` | Seconds per request. |
 | **Memory** | | |
