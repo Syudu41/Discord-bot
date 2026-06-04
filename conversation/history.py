@@ -1,37 +1,28 @@
-"""Per-channel short-term conversation memory (in-RAM, ephemeral).
+"""Per-channel conversation transcript — a thin, name-aware view over MemoryStore.
 
-A bounded buffer keeps recent turns so the bot has context without ballooning
-the prompt — important on a memory-constrained host and a small model. Lost on
-restart by design; persistence is a later milestone.
+The durable storage lives in `memory.store.MemoryStore`; this class is just the
+transcript-facing API the bot uses each turn. Speaker names are tracked so the
+model knows who said what (whole-channel chats have many speakers) and can address
+people by name.
 """
 from __future__ import annotations
 
-from collections import defaultdict, deque
-
 from config import config
+from memory.store import ASSISTANT_NAME, MemoryStore
 
 
 class ChannelHistory:
-    """Rolling {role, content} buffer keyed by channel id.
+    """Recent {role, name, content} turns per channel, backed by the store."""
 
-    Holds up to `history_turns` user+assistant pairs per channel.
-    """
+    def __init__(self, store: MemoryStore) -> None:
+        self._store = store
 
-    def __init__(self) -> None:
-        maxlen = config.history_turns * 2
-        self._buffers: dict[int, deque[dict[str, str]]] = defaultdict(
-            lambda: deque(maxlen=maxlen)
-        )
-
-    def add_user(self, channel_id: int, content: str) -> None:
-        self._buffers[channel_id].append({"role": "user", "content": content})
+    def add_user(self, channel_id: int, name: str, content: str) -> None:
+        self._store.add_turn(channel_id, "user", content, name=name)
 
     def add_assistant(self, channel_id: int, content: str) -> None:
-        self._buffers[channel_id].append({"role": "assistant", "content": content})
+        self._store.add_turn(channel_id, "assistant", content, name=ASSISTANT_NAME)
 
     def get(self, channel_id: int) -> list[dict[str, str]]:
-        """Recent turns for a channel, oldest first."""
-        return list(self._buffers[channel_id])
-
-    def clear(self, channel_id: int) -> None:
-        self._buffers.pop(channel_id, None)
+        """Recent turns (oldest first) for prompt assembly."""
+        return self._store.recent_turns(channel_id, config.history_turns * 2)
