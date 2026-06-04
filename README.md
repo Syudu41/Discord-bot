@@ -1,22 +1,38 @@
-# Pariston — local Discord chatbot
+# Pariston — a local Discord chatbot with a persona
 
-A Discord chatbot with the persona of **Pariston** (Hunter x Hunter–inspired): charming, polite,
-playful, and quietly dangerous. Powered entirely by a **local open-source model via Ollama** — no
-OpenAI key, no per-token cost, fully private.
+A Discord chatbot that talks as **Pariston** (Hunter x Hunter–inspired): charming, polite, playful,
+and quietly dangerous. It runs entirely on a **local open-source model via Ollama** — no OpenAI key,
+no per-token cost, fully private.
 
-This is **Milestone 1**: a working whole-channel chatbot. See `trial-persona.md` for the persona
-design doc and the longer roadmap (memory → logging → manual learning → RAG → fine-tuning).
+It doesn't just answer — it **holds a conversation**: it engages with what you say, remembers people and
+topics across restarts, addresses people by name, and can revive a quiet channel on its own.
+
+> Persona design and the longer roadmap (RAG → dataset builder → fine-tuning) live in
+> [`trial-persona.md`](trial-persona.md), the source of truth for character direction.
+
+## Features
+
+- **Engaged, in-character replies** — reacts to your actual words, asks real follow-ups, calls back to
+  earlier moments. Charming with a real edge, never a generic villain.
+- **Persistent memory** — per-channel transcript, per-person facts, and a running summary saved to disk;
+  survives restarts. A background pass distills durable facts every few turns (never slows your reply).
+- **Speaker identity** — tracks who said what in a shared channel and uses names.
+- **Proactivity** — optionally breaks the silence in a quiet channel with a callback to something earlier,
+  behind strict anti-spam guards.
+- **Local & free** — any Ollama chat model; defaults tuned for a ~4 GB GPU.
 
 ## Layout
 
 ```
-bot.py                  # entry point + on_message handler
+bot.py                  # entry point: on_message, memory hook, proactive loop
 config.py               # env loading / validation
-persona/pariston.py     # SYSTEM_PROMPT + few-shot examples (edit this to tune character)
-llm/ollama_client.py    # async wrapper over Ollama /api/chat (strips qwen3 <think>)
-conversation/history.py # per-channel rolling short-term memory
+persona/pariston.py     # SYSTEM_PROMPT, few-shot, prompt builders — edit to tune character
+llm/ollama_client.py    # async wrapper over Ollama /api/chat (qwen3 <think> handling)
+conversation/history.py # name-aware transcript view over the store
+memory/store.py         # persistent per-channel memory (transcript + facts + summary)
+memory/data/            # saved memory, one JSON per channel (gitignored)
 smoke_test.py           # test Ollama + persona without Discord
-Modelfile               # optional baked-in persona model
+Modelfile               # optional: bake the persona into an Ollama model
 ```
 
 ## Setup
@@ -26,8 +42,7 @@ Needs Python 3.10+ (3.12 recommended). On Ubuntu, to install a newer Python:
 
 ```bash
 sudo add-apt-repository ppa:deadsnakes/ppa -y
-sudo apt update
-sudo apt install python3.12 python3.12-venv -y
+sudo apt update && sudo apt install python3.12 python3.12-venv -y
 ```
 
 Then create the venv and install:
@@ -43,52 +58,89 @@ pip install -r requirements.txt
 Make sure Ollama is running and the model is pulled:
 
 ```bash
-ollama serve            # if not already running
-ollama pull qwen3:4b    # default model (fits ~4 GB GPU)
+ollama serve              # if not already running
+ollama pull qwen2.5:3b    # default — fast (~4-5s) and stable on a 4 GB GPU
 ```
 
 ### 3. Config
-Copy and fill the env file:
-
 ```bash
 cp .env.example .env
-# edit .env: set DISCORD_TOKEN, ALLOWED_CHANNELS, etc.
+# edit .env: set DISCORD_TOKEN and ALLOWED_CHANNELS at minimum
 ```
 
 ### 4. Discord Developer Portal
 - Create an application → **Bot** → copy the token into `DISCORD_TOKEN`.
 - Enable **Message Content Intent** (Bot → Privileged Gateway Intents). Required for whole-channel reading.
-- Invite the bot: OAuth2 → URL Generator → scope `bot` → permissions *Read Messages/View Channels* +
-  *Send Messages* → open the URL and add it to your server.
-- Enable Developer Mode in Discord (Settings → Advanced), right-click your channel → **Copy Channel ID**,
-  put it in `ALLOWED_CHANNELS` (comma-separated for several).
+- Invite the bot: OAuth2 → URL Generator → scope `bot` → permissions *View Channels* + *Send Messages* →
+  open the URL and add it to your server.
+- Enable Developer Mode (Settings → Advanced), right-click your channel → **Copy Channel ID**, put it in
+  `ALLOWED_CHANNELS` (comma-separated for several).
 
 ## Run
 
 ```bash
-# 1) quick check without Discord
-python smoke_test.py
-
-# 2) start the bot
-python bot.py
+python smoke_test.py "are you manipulating us?"   # quick check, no Discord needed
+python bot.py                                     # start the bot
 ```
 
-Post in an allowed channel (or @mention the bot in `mention` mode) and Pariston replies.
+Post in an allowed channel (or @mention the bot in `mention` mode) and Pariston replies. Memory is written
+to `memory/data/`; delete a channel's JSON there to wipe its memory.
 
 ## Configuration (.env)
 
 | Key | Default | Notes |
 |---|---|---|
-| `DISCORD_TOKEN` | — | Required. |
-| `ALLOWED_CHANNELS` | (empty) | Comma-separated. Empty = every channel it can see. |
+| `DISCORD_TOKEN` | — | **Required.** |
+| `ALLOWED_CHANNELS` | (empty) | Comma-separated channel IDs. Empty = every channel it can see. |
 | `TRIGGER_MODE` | `channel` | `channel` (whole-channel) or `mention`. |
-| `OLLAMA_URL` | `http://localhost:11434` | |
-| `OLLAMA_MODEL` | `qwen3:4b` | Swap freely (e.g. `qwen2.5:7b` if you have the RAM). |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server. |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | Any Ollama chat model. See **Choosing a model**. |
+| `OLLAMA_KEEP_ALIVE` | `30m` | How long the model stays resident. `-1` = forever. |
+| `DISABLE_THINKING` | *(auto)* | Auto-on for `qwen3` only; set `true`/`false` to force. |
 | `TEMPERATURE` / `TOP_P` / `REPEAT_PENALTY` | `0.85` / `0.9` / `1.1` | Sampling. |
-| `NUM_CTX` | `4096` | Context window tokens. |
-| `HISTORY_TURNS` | `8` | User+bot pairs kept per channel. |
+| `NUM_CTX` / `MAX_TOKENS` | `4096` / `384` | Context window / max generated tokens. |
+| `HISTORY_TURNS` | `8` | User+bot pairs kept as live context. |
 | `OLLAMA_TIMEOUT` | `120` | Seconds per request. |
+| **Memory** | | |
+| `MEMORY_DIR` | `memory/data` | Where per-channel memory is stored. |
+| `MEMORY_SUMMARY_EVERY` | `6` | Refresh facts/summary after this many user turns. |
+| **Proactivity** | | |
+| `PROACTIVE_ENABLED` | `true` | Let Pariston speak unprompted to revive a quiet channel. |
+| `IDLE_MINUTES` | `8` | Re-engage only after a real exchange goes quiet this long. |
+| `PROACTIVE_COOLDOWN_MINUTES` | `30` | Minimum gap between proactive messages per channel. |
+| `PROACTIVE_MAX_PER_HOUR` | `2` | Hard ceiling per channel per rolling hour. |
+| `PROACTIVE_CHECK_SECONDS` | `60` | How often the idle-check loop runs. |
+
+To turn proactivity off entirely, set `PROACTIVE_ENABLED=false`.
+
+## Choosing a model
+
+| Model | Speed (warm) | Notes |
+|---|---|---|
+| **`qwen2.5:3b`** | ~4–5s | **Default.** Fast, stable, fits a 4 GB GPU, good persona. |
+| `qwen3:4b` | ~40–100s | Works, but a *reasoning* model — it thinks before every reply, so it's slow. Auto-handled via `/no_think`. |
+| `llama3.2:3b` | — | ❌ Crashes the runner (`exit status 2`) on a GTX 960M. Avoid. |
+
+Bigger models (e.g. `qwen2.5:7b`) are better but need more RAM/VRAM than a 4 GB card comfortably allows.
 
 ## Tuning the persona
-Edit `persona/pariston.py` (`SYSTEM_PROMPT` and `FEW_SHOT`), then restart the bot — no rebuild needed.
-That file is the single source of truth for character.
+Edit [`persona/pariston.py`](persona/pariston.py) — `SYSTEM_PROMPT` and `FEW_SHOT` are the character; the
+`build_*_messages` helpers shape the reply, summary, and proactive prompts. Restart the bot to apply; no
+rebuild needed. That file is the single source of truth for character.
+
+## How memory works
+- Every turn is appended to `memory/data/<channel_id>.json` (bounded rolling transcript) — so short-term
+  context survives a restart.
+- Every `MEMORY_SUMMARY_EVERY` user turns, a low-temperature background call distills **durable facts**
+  (per person) and a **running summary**. These are injected into the prompt as a "WHAT YOU REMEMBER" block,
+  so replies and proactive lines can call back to earlier conversations.
+
+## Troubleshooting
+- **Replies are very slow** → you're on a reasoning model (`qwen3`). Switch `OLLAMA_MODEL=qwen2.5:3b`.
+- **400 Bad Request from Ollama** → `OLLAMA_KEEP_ALIVE` must be a duration (`30m`) or an integer (`-1`),
+  not the string `"-1"` — the config handles this, but custom values should follow the rule.
+- **Empty replies on qwen3** → its hidden "thinking" ate the token budget; raise `MAX_TOKENS`.
+- **Runner crash (`exit status 2`)** → out of memory or an unsupported model for your GPU; use a smaller
+  model and make sure only one model is resident (`ollama ps`).
+- **Bot ignores messages** → check **Message Content Intent** is enabled and the channel ID is in
+  `ALLOWED_CHANNELS`.
