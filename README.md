@@ -144,3 +144,32 @@ rebuild needed. That file is the single source of truth for character.
   model and make sure only one model is resident (`ollama ps`).
 - **Bot ignores messages** → check **Message Content Intent** is enabled and the channel ID is in
   `ALLOWED_CHANNELS`.
+- **Every message answered twice** → two bot instances are running. Check with `pgrep -af bot.py` and kill
+  the extras; run the bot in only one place.
+- **Bot uses a wrong name or an emoji** → likely leftover from old persisted memory; delete that channel's
+  file in `memory/data/` to reset it.
+
+## Status & roadmap
+
+### Done
+- ✅ Local Ollama chatbot, whole-channel or mention mode (Milestone 1)
+- ✅ "Engage & build" persona — reacts, follows up, calls back (not a pure deflector)
+- ✅ Fast, stable model on a 4 GB GPU (`qwen2.5:3b`)
+- ✅ Speaker identity + persistent per-channel memory: transcript, facts, running summary (Milestone 2)
+- ✅ Proactivity — revives quiet channels with a callback, behind anti-spam guards
+- ✅ Real @mention pings; no invented names; no emoji
+
+### Pending / to-do
+- [ ] **Persona refinement (ongoing)** — keep tuning `persona/pariston.py` from more HxH sources: voice,
+      brevity, behavior rules, and few-shot examples. Treat this as a continuous task, not a one-off.
+- [ ] **Manual memory commands** (Milestone 4) — `/pariston remember | correct | forget | memories`.
+- [ ] **Persistent logging** (Milestone 3) — structured conversation/reply log (e.g. SQLite) for review.
+- [ ] **RAG long-term memory** (Milestone 5) — embeddings + vector store for recall beyond the summary.
+- [ ] **Dataset builder + fine-tuning** (Milestones 6–7) — turn good exchanges/corrections into JSONL,
+      then LoRA/QLoRA a local model.
+- [ ] **Multi-user mentions** — currently only the person being replied to can be pinged; pinging a third
+      party by name isn't supported yet.
+- [ ] **Proactive polish** — the unprompted line renders `@user` as plain "you"; could target a specific
+      recent participant instead.
+
+See [`trial-persona.md`](trial-persona.md) for the full milestone descriptions and long-term direction.

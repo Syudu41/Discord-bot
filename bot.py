@@ -63,6 +63,37 @@ def _chunk(text: str, limit: int = DISCORD_MAX_LEN) -> list[str]:
     return chunks
 
 
+# The persona addresses whoever it's replying to with the literal token "@user"
+# (also tolerate "@you") — we swap it for a real Discord mention so it pings them
+# and we never guess a name. Case-insensitive.
+_USER_TOKEN_RE = re.compile(r"@(?:user|you)\b", re.IGNORECASE)
+
+
+def _apply_mentions(text: str, mention: str | None) -> str:
+    """Replace the @user/@you addressing token with a real mention (or 'you')."""
+    return _USER_TOKEN_RE.sub(mention or "you", text)
+
+
+# Pariston never uses emoji — strip any the model emits as a safety net. Covers the
+# common pictograph/symbol/dingbat blocks and variation selectors; leaves the em-dash
+# and ordinary punctuation alone.
+_EMOJI_RE = re.compile(
+    "[\U0001f000-\U0001faff"  # emoticons, pictographs, transport, supplemental symbols
+    "\U00002600-\U000027bf"  # misc symbols + dingbats (☺ ✨ ✔ etc.)
+    "\U00002b00-\U00002bff"  # misc symbols and arrows (stars etc.)
+    "\U0001f1e6-\U0001f1ff"  # regional indicators (flags)
+    "\U0000fe00-\U0000fe0f"  # variation selectors
+    "\U00002300-\U000023ff]+",  # technical (⌛ ⏰ etc.)
+    flags=re.UNICODE,
+)
+
+
+def _strip_emoji(text: str) -> str:
+    cleaned = _EMOJI_RE.sub("", text)
+    # Collapse the spaces an emoji removal can leave behind.
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+
+
 def _parse_memory(raw: str) -> tuple[str, dict[str, list[str]]] | None:
     """Pull {"summary": str, "facts": {name: [..]}} out of the model's reply.
 
@@ -173,10 +204,17 @@ class ParistonBot(discord.Client):
 
         elapsed = time.monotonic() - started
         reply = reply.strip() or pariston.FALLBACK_REPLY
+        # Store the model-facing form (with the @user token); send the rendered form
+        # (with a real mention) so it pings the right person and never guesses a name.
         self.history.add_assistant(channel_id, reply)
         log.info("[#%s] Pariston (%.1fs): %s", channel_id, elapsed, reply)
 
-        for chunk in _chunk(reply):
+        display = _strip_emoji(_apply_mentions(reply, message.author.mention))
+        chunks = _chunk(display)
+        # Reply to the user's message with mention_author=True so they're reliably
+        # pinged; send any overflow chunks as plain follow-ups.
+        await message.reply(chunks[0], mention_author=True)
+        for chunk in chunks[1:]:
             await message.channel.send(chunk)
 
         # Refresh distilled memory in the background (every N turns) — never blocks
@@ -256,7 +294,9 @@ class ParistonBot(discord.Client):
             self.history.add_assistant(channel_id, line)
             self.store.mark_proactive(channel_id)
         log.info("[#%s] Pariston (proactive): %s", channel_id, line)
-        for chunk in _chunk(line):
+        # No single addressee for an unprompted line — render @user as plain "you".
+        display = _strip_emoji(_apply_mentions(line, None))
+        for chunk in _chunk(display):
             await channel.send(chunk)
 
 
